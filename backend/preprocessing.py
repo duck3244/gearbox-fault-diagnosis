@@ -36,23 +36,41 @@ class SignalPreprocessor:
     def bandpass_filter(self, signal_data, lowcut=10, highcut=5000, order=5):
         """
         밴드패스 필터 적용
-        
+
         Args:
             signal_data (np.ndarray): 입력 신호
             lowcut (float): 하한 주파수
             highcut (float): 상한 주파수
             order (int): 필터 차수
-        
+
         Returns:
             np.ndarray: 필터링된 신호
         """
+        import warnings
+
         nyquist = 0.5 * self.sampling_rate
-        low = lowcut / nyquist
-        high = highcut / nyquist
-        
+
+        # 나이퀴스트 한계 방어 — butter는 Wn이 (0, 1) 범위여야 함
+        safe_high = min(highcut, nyquist * 0.99)
+        safe_low = max(lowcut, 1e-6)
+        if safe_low >= safe_high:
+            raise ValueError(
+                f"invalid bandpass range: low={lowcut}, high={highcut}, "
+                f"sampling_rate={self.sampling_rate} (nyquist={nyquist})"
+            )
+        if safe_high != highcut:
+            warnings.warn(
+                f"highcut {highcut}Hz exceeds nyquist*0.99 "
+                f"({nyquist*0.99:.1f}Hz); clipped to {safe_high:.1f}Hz",
+                RuntimeWarning, stacklevel=2,
+            )
+
+        low = safe_low / nyquist
+        high = safe_high / nyquist
+
         b, a = signal.butter(order, [low, high], btype='band')
         filtered_signal = signal.filtfilt(b, a, signal_data)
-        
+
         return filtered_signal
     
     def normalize(self, signal_data, method='minmax'):

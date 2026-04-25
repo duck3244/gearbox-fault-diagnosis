@@ -6,11 +6,13 @@ train.py - 기어박스 고장 진단 모델 학습
 """
 
 import argparse
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_class_weight
 
 from models import get_model
 from dataset import load_kaggle_gearbox_data, create_dataloaders
@@ -61,7 +63,13 @@ def parse_args():
                        help='CUDA 사용 안함')
     parser.add_argument('--output_dir', type=str, default='results',
                        help='결과 저장 디렉토리')
-    
+    parser.add_argument('--amp', action='store_true',
+                       help='Mixed precision(AMP) 학습 (CUDA 권장)')
+    parser.add_argument('--class_weight', action='store_true',
+                       help='클래스 불균형 보정: CrossEntropyLoss weight 자동 계산')
+    parser.add_argument('--deterministic', action='store_true',
+                       help='완전 재현성 모드 (cudnn.benchmark=False; 속도 저하)')
+
     return parser.parse_args()
 
 
@@ -69,8 +77,8 @@ def main():
     # 인자 파싱
     args = parse_args()
     
-    # 시드 설정
-    set_seed(args.seed)
+    # 시드 설정 (deterministic=True면 완전 재현성, 기본은 속도 우선)
+    set_seed(args.seed, deterministic=args.deterministic)
     
     # 디바이스 설정
     device = get_device(use_cuda=not args.no_cuda)
@@ -138,16 +146,31 @@ def main():
     print(f"총 파라미터 수: {total_params:,}")
     print(f"학습 가능한 파라미터 수: {trainable_params:,}")
     
-    # 손실 함수 및 옵티마이저
-    criterion = nn.CrossEntropyLoss()
+    # 손실 함수 (클래스 불균형 보정 옵션)
+    if args.class_weight:
+        cw = compute_class_weight(
+            class_weight='balanced', classes=np.arange(num_classes), y=y_train
+        )
+        weight_tensor = torch.tensor(cw, dtype=torch.float32, device=device)
+        print(f"클래스 가중치: {dict(zip(label_names, cw.round(3)))}")
+        criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+    else:
+        criterion = nn.CrossEntropyLoss()
+
     optimizer = optim.Adam(
-        model.parameters(), 
-        lr=args.lr, 
+        model.parameters(),
+        lr=args.lr,
         weight_decay=args.weight_decay
     )
+
+    # AMP 스케일러 (CUDA에서만 의미, CPU면 autocast가 no-op)
+    use_amp = args.amp and device.type == 'cuda'
+    amp_scaler = torch.amp.GradScaler('cuda') if use_amp else None
+    if args.amp and not use_amp:
+        print("⚠️  --amp는 CUDA에서만 효과가 있습니다. CPU이므로 비활성화됩니다.")
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=7, 
-        verbose=True, min_lr=1e-6
+        optimizer, mode='min', factor=0.5, patience=7,
+        min_lr=1e-6
     )
     
     # Early Stopping
@@ -165,7 +188,8 @@ def main():
     for epoch in range(args.epochs):
         # 학습
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, device
+            model, train_loader, criterion, optimizer, device,
+            scaler=amp_scaler, use_amp=use_amp
         )
         
         # 검증
@@ -179,13 +203,16 @@ def main():
         val_losses.append(val_loss)
         val_accs.append(val_acc)
         
-        # Learning rate scheduling
+        # Learning rate scheduling (verbose 대체: 수동 로그)
+        prev_lr = optimizer.param_groups[0]['lr']
         scheduler.step(val_loss)
-        
+        curr_lr = optimizer.param_groups[0]['lr']
+
         # 출력
         print(f'\nEpoch [{epoch+1}/{args.epochs}]')
         print(f'  Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}%')
         print(f'  Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%')
+        print(f'  LR: {curr_lr:.2e}' + (f' (↓ from {prev_lr:.2e})' if curr_lr < prev_lr else ''))
         
         # 최고 성능 모델 저장
         if val_acc > best_val_acc:

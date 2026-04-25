@@ -19,6 +19,8 @@ from sklearn.metrics import (
 )
 from pathlib import Path
 
+from sklearn.model_selection import train_test_split
+
 from models import get_model
 from dataset import load_kaggle_gearbox_data, GearboxDataset
 from torch.utils.data import DataLoader
@@ -35,22 +37,36 @@ class ModelEvaluator:
             device (str): 디바이스
         """
         self.device = torch.device(device)
-        
-        # 체크포인트 로드
-        checkpoint = torch.load(model_path, map_location=self.device)
+
+        # 체크포인트 로드 (scaler 등 pickle 객체 포함 → weights_only=False 필수)
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         self.label_names = checkpoint['label_names']
         self.scaler = checkpoint['scaler']
-        
+
         # 모델 로드
         input_size = self.scaler.mean_.shape[0]
         num_classes = len(self.label_names)
-        
-        self.model = get_model('CNN', input_size, num_classes)
+
+        # state_dict에서 모델 타입 자동 감지
+        model_type = self._detect_model_type(checkpoint['model_state_dict'])
+
+        self.model = get_model(model_type, input_size, num_classes)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.to(self.device)
         self.model.eval()
-        
+
         print(f"모델 로드 완료: {model_path}")
+        print(f"모델 타입: {model_type}")
+
+    @staticmethod
+    def _detect_model_type(state_dict):
+        """state_dict에서 모델 타입(CNN/ResNet/MLP)을 감지"""
+        keys = list(state_dict.keys())
+        if any('residual_blocks' in k for k in keys):
+            return 'ResNet'
+        if any(k.startswith('layers.') for k in keys):
+            return 'MLP'
+        return 'CNN'
     
     def evaluate(self, test_loader):
         """
@@ -318,6 +334,12 @@ def parse_args():
                        help='배치 크기')
     parser.add_argument('--no_cuda', action='store_true',
                        help='CPU 사용 강제')
+    parser.add_argument('--test_size', type=float, default=0.15,
+                       help='train.py와 동일해야 함 (기본 0.15)')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='train.py와 동일한 시드로 동일한 test split 재현')
+    parser.add_argument('--use_all_data', action='store_true',
+                       help='분할 없이 전체 데이터 평가 (데이터 누수 주의)')
 
     return parser.parse_args()
 
@@ -339,11 +361,22 @@ def main():
     print("\n데이터 로딩 중...")
     X, y, label_names = load_kaggle_gearbox_data(args.data_path)
 
+    # train.py와 동일한 분할로 테스트 서브셋만 사용 (데이터 누수 방지)
+    if args.use_all_data:
+        print("⚠️  --use_all_data: 학습 데이터 포함 전체를 평가합니다 (데이터 누수 가능)")
+        X_eval, y_eval = X, y
+    else:
+        _, X_eval, _, y_eval = train_test_split(
+            X, y, test_size=args.test_size,
+            random_state=args.seed, stratify=y
+        )
+        print(f"테스트 분할 적용 (test_size={args.test_size}, seed={args.seed})")
+
     # 데이터 정규화
-    X_scaled = evaluator.scaler.transform(X)
+    X_scaled = evaluator.scaler.transform(X_eval)
 
     # 데이터셋 및 로더 생성
-    test_dataset = GearboxDataset(X_scaled, y)
+    test_dataset = GearboxDataset(X_scaled, y_eval)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size,
                             shuffle=False, num_workers=2)
 

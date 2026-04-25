@@ -42,6 +42,13 @@ class GearboxPredictor:
         self.model.to(self.device)
         self.model.eval()
 
+        # 체크포인트 메타 (API에서 재사용)
+        self.model_type = model_type
+        self.val_acc = checkpoint.get('val_acc')
+        self.epoch = checkpoint.get('epoch')
+        self.input_size = input_size
+        self.num_classes = num_classes
+
         print(f"모델 로드 완료: {model_path}")
         print(f"모델 타입: {model_type}")
         print(f"클래스: {self.label_names}")
@@ -170,36 +177,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def interactive_mode(predictor):
-    """대화형 예측 모드"""
-    print("\n" + "=" * 70)
-    print("대화형 예측 모드")
-    print("=" * 70)
-    print("진동 신호 데이터를 입력하세요 (쉼표로 구분)")
-    print("종료하려면 'quit' 입력\n")
-
-    while True:
-        user_input = input("신호 데이터: ").strip()
-
-        if user_input.lower() in ['quit', 'exit', 'q']:
-            print("종료합니다.")
-            break
-
-        try:
-            signal_data = [float(x) for x in user_input.split(',')]
-            result = predictor.predict_single(signal_data)
-
-            print(f"\n예측 클래스: {result['predicted_class']}")
-            print(f"신뢰도: {result['confidence']*100:.2f}%")
-            print("클래스별 확률:")
-            for class_name, prob in result['probabilities'].items():
-                print(f"  {class_name}: {prob*100:.2f}%")
-            print()
-
-        except Exception as e:
-            print(f"오류 발생: {e}\n")
-
-
 def main():
     args = parse_args()
 
@@ -296,8 +273,12 @@ def main():
             print("지원 형식: .csv, .npy")
     
     else:
-        # 대화형 모드
-        interactive_mode(predictor)
+        print("\n❌ 입력 데이터 파일(--input_data)이 필요합니다.")
+        print("   신호 차원이 커서 대화형 입력은 지원하지 않습니다.")
+        print("   사용 예:")
+        print("     python inference.py --model_path ... --input_data test.csv")
+        print("     python inference.py --model_path ... --input_data signals.npy")
+        print("   또는 자동 스크립트: python simple_predict.py")
 
 
 if __name__ == '__main__':

@@ -1,421 +1,180 @@
-# Gearbox Fault Diagnosis - PyTorch
+# Gearbox Fault Diagnosis
 
-기어박스 진동 신호를 분석하여 고장 유무를 진단하는 딥러닝 프로젝트입니다.
+기어박스 진동 신호에서 고장 유무를 분류하는 프로젝트입니다.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+- **Backend**: PyTorch 기반 1D-CNN / ResNet / MLP + FastAPI 추론 서버
+- **Frontend**: Vite + React 18 + TailwindCSS 대시보드
+- **환경**: miniconda `py310_pt` (Python 3.10 + torch 2.4.1+cu121) / Node 18 LTS
 
-## 📁 프로젝트 구조
+---
+
+## 데모
+
+![Gearbox Fault Diagnosis 대시보드](./demo.png)
+
+업로드한 진동 신호(`.csv` / `.npy`)를 선택한 모델로 추론하고, 샘플별 클래스 확률을 시각화합니다.
+
+---
+
+## 디렉토리 구조
 
 ```
 gearbox-fault-diagnosis/
-│
-├── 🎯 핵심 실행 파일
-│   ├── main.py                 # 통합 메인 인터페이스
-│   ├── train.py                # 기본 학습 스크립트
-│   ├── train_lowmem.py         # 메모리 효율적 학습 ⭐
-│   ├── inference.py            # 추론 스크립트
-│   ├── evaluate.py             # 평가 스크립트
-│   └── visualize.py            # 시각화 스크립트
-│
-├── 🧩 모듈 파일
-│   ├── models.py               # 모델 정의 (CNN, ResNet, MLP)
-│   ├── dataset.py              # 데이터 로딩 및 전처리
-│   ├── utils.py                # 유틸리티 함수
-│   ├── config.py               # 설정 관리
-│   └── preprocessing.py        # 신호 전처리 및 특징 추출
-│
-├── 🔧 편의 도구
-│   ├── downsample_data.py      # 데이터 다운샘플링 ⭐
-│   ├── simple_predict.py       # 간단한 예측 ⭐
-│   └── test_predict.py         # 커스텀 테스트 예측 ⭐
-│
-├── 📚 문서
-│   ├── README.md               # 이 파일
-│   ├── requirements.txt        # 패키지 목록
-│   ├── setup.py                # 설치 스크립트
-│   └── .gitignore              # Git 설정
-│
-├── 📂 데이터 (사용자 생성)
-│   ├── data/                   # 원본 데이터 (Kaggle)
-│   └── data_downsampled/       # 다운샘플링된 데이터 ⭐
-│
-└── 📂 결과 (자동 생성)
-    ├── results/                # 학습 결과
-    ├── evaluation_results/     # 평가 결과
-    └── visualizations/         # 시각화
+├── backend/
+│   ├── app/                         # FastAPI (추론 API)
+│   │   ├── main.py                  # 엔트리 (uvicorn app.main:app)
+│   │   ├── schemas.py               # Pydantic v2 모델
+│   │   ├── api/{health,models,predict}.py
+│   │   └── services/predictor_pool.py   # LRU 캐시 + asyncio.Lock
+│   ├── train.py / evaluate.py / inference.py        # 학습·평가·추론 CLI
+│   ├── simple_predict.py / test_predict.py          # 추론 편의 스크립트
+│   ├── downsample_data.py / visualize.py            # 데이터·결과 유틸
+│   ├── models.py / dataset.py / preprocessing.py / utils.py / config.py
+│   ├── data/               # Kaggle 원본 (gitignored)
+│   ├── data_downsampled/   # 다운샘플링 (8192 차원)
+│   ├── results/            # 학습 산출물 (모델·그림)
+│   └── requirements.txt
+├── frontend/
+│   ├── package.json / vite.config.ts / tailwind.config.js
+│   └── src/
+│       ├── App.tsx / main.tsx / index.css
+│       ├── api/client.ts
+│       └── components/{ModelSelector,UploadCard,PredictionResult,HistoryTable}.tsx
+├── docs/
+│   ├── ARCHITECTURE.md     # 시스템 구조·모듈 책임·파이프라인
+│   └── UML.md              # 클래스·시퀀스·상태 다이어그램 (Mermaid)
+├── README.md / LICENSE
 ```
 
 ---
 
-## 🚀 빠른 시작 (3단계)
+## 요구사항
 
-### 1️⃣ 설치
+| | 버전 |
+|---|---|
+| Python | 3.10 (`py310_pt` conda env 권장) |
+| PyTorch | 2.4.1+cu121 (환경에 이미 설치) |
+| Node.js | 18 LTS (18.18 이상) |
+| npm | 10.x |
 
+설치 확인:
 ```bash
-# 패키지 설치
-pip install -r requirements.txt
-
-# 또는 개발 모드
-pip install -e .
+conda env list | grep py310_pt
+node --version   # v18.x
 ```
 
-### 2️⃣ 데이터 준비
+---
+
+## 빠른 시작
+
+### 1. 백엔드 (conda `py310_pt`)
 
 ```bash
-# Kaggle 데이터 다운로드
-kaggle datasets download -d brjapon/gearbox-fault-diagnosis
-unzip gearbox-fault-diagnosis.zip -d ./data
+cd backend
+conda activate py310_pt
+pip install -r requirements.txt        # fastapi / uvicorn / python-multipart / pydantic 포함
 
-# 🔥 중요: 데이터 다운샘플링 (메모리 절약)
+# (선택) 원본 데이터가 있으면 다운샘플링
 python downsample_data.py --data_path ./data --target_size 8192
+
+# 모델 1개는 있어야 API가 쓸모가 있습니다
+python train.py --data_path ./data_downsampled --model CNN --epochs 50 --amp
+
+# API 기동
+uvicorn app.main:app --reload --port 8000
 ```
 
-### 3️⃣ 학습 & 예측
+Swagger UI: <http://localhost:8000/docs>
+
+### 2. 프런트엔드 (Node 18)
+
+```bash
+cd frontend
+npm install
+npm run dev              # http://localhost:5173 (→ /api 는 :8000 으로 프록시)
+```
+
+### 3. 프런트 프로덕션 빌드
+
+```bash
+cd frontend
+npm run build            # dist/ 에 정적 자산 생성
+npm run preview          # 로컬 미리보기
+```
+
+배포 시 `frontend/dist/`를 정적 호스팅(Nginx 등) 또는 FastAPI `StaticFiles`로 서빙하면 됩니다.
+
+---
+
+## 주요 CLI (backend/)
 
 ```bash
 # 학습
-python main.py train --data_path ./data_downsampled --model CNN
+python train.py --data_path ./data_downsampled --model CNN --epochs 100 \
+                --amp --class_weight
 
-# 예측
+# 평가 (train.py와 동일한 split 재현)
+python evaluate.py --model_path results/<ts>/best_model.pth \
+                   --data_path ./data_downsampled
+
+# 예측 (파일 입력 필수, 대화형 모드 없음)
+python inference.py --model_path results/<ts>/best_model.pth \
+                    --input_data test.csv
+# 또는 자동으로 최신 모델 사용
 python simple_predict.py
 ```
 
-**완료! 🎉**
+학습 플래그 요약:
+- `--amp` : CUDA Mixed Precision
+- `--class_weight` : CrossEntropyLoss 가중치 자동 계산
+- `--deterministic` : `cudnn.benchmark=False`로 완전 재현성 (속도 감소)
 
 ---
 
-## ⚠️ 필수: 메모리 문제 해결
+## API 요약
 
-### 문제
-- 원본 데이터: 457,728 차원 (너무 큼!)
-- GPU 메모리 부족 오류 발생
+모든 엔드포인트는 `/api` 프리픽스를 사용합니다.
 
-### ✅ 해결책
+| Method | Path | 설명 |
+|---|---|---|
+| GET | `/api/health` | torch / CUDA 상태 |
+| GET | `/api/models` | 등록된 `model_id` 목록 (newest-first) |
+| GET | `/api/models/{model_id}/meta` | 모델 타입·입력 차원·클래스 등 메타 |
+| POST | `/api/predict` | multipart: `model_id` + `file` (.csv/.npy) |
+| GET | `/api/history?limit=N` | 최근 예측 이력 (인메모리, 최대 100) |
 
-#### 방법 1: 데이터 다운샘플링 (강력 권장!)
-
+요청 예시:
 ```bash
-# 457,728 → 8,192로 줄이기 (98% 메모리 절감)
-python downsample_data.py --data_path ./data --target_size 8192
-
-# 다운샘플링된 데이터로 학습
-python main.py train --data_path ./data_downsampled --model CNN
+curl -F "model_id=<YYYYMMDD_HHMMSS>" -F "file=@sample.npy" \
+     http://localhost:8000/api/predict
 ```
 
-**효과:**
-- ✅ 메모리 사용량 98% 감소
-- ✅ 학습 속도 10배 향상
-- ✅ 성능 유지 (1-2%만 감소)
-
-#### 방법 2: 메모리 효율적 학습
-
-```bash
-# 그래디언트 누적 사용
-python train_lowmem.py \
-    --data_path ./data \
-    --model CNN \
-    --batch_size 2 \
-    --accumulation_steps 16
-```
-
-#### 방법 3: 배치 크기 줄이기
-
-```bash
-# 배치 크기 2-4로 설정
-python main.py train --data_path ./data --model CNN --batch_size 2
-```
-
-**자세한 내용:** `QUICK_START_MEMORY.md` 참조
+### 방어 로직 (MVP 구현)
+- **Path traversal 차단**: `model_id`는 `^\d{8}_\d{6}$` 정규식 + `Path.resolve()` 검증
+- **업로드 크기 제한**: 20MB (1MB 청크로 읽으며 초과 시 413)
+- **입력 차원 검증**: `scaler.mean_.shape[0]`과 일치해야 함, 불일치 시 400
+- **확장자 화이트리스트**: `.csv`, `.npy` 만 허용
+- **`.npy` 안전 로드**: `allow_pickle=False` 강제 (코드 실행 방지)
+- **동시 추론 직렬화**: predictor별 `asyncio.Lock` + `run_in_threadpool`로 GPU 경합 방지
 
 ---
 
-## 📖 사용 가이드
+## 개발 팁
 
-### 학습
-
-#### 기본 학습
-```bash
-python main.py train --data_path ./data_downsampled --model CNN
-```
-
-#### 고급 설정
-```bash
-python train.py \
-    --data_path ./data_downsampled \
-    --model ResNet \
-    --batch_size 32 \
-    --epochs 150 \
-    --lr 0.0005
-```
-
-#### 메모리 효율 모드
-```bash
-python train_lowmem.py \
-    --data_path ./data_downsampled \
-    --model CNN \
-    --batch_size 4 \
-    --accumulation_steps 8
-```
-
-### 예측
-
-#### 🥇 방법 1: 자동 예측 (가장 쉬움!)
-```bash
-python simple_predict.py
-```
-
-**자동으로:**
-- 최신 모델 찾기
-- 테스트 데이터 로드
-- 5개 샘플 예측
-- 정확도 계산
-
-#### 🥈 방법 2: 커스텀 테스트
-```bash
-python test_predict.py \
-    --model_path results/*/best_model.pth \
-    --n_samples 10
-```
-
-#### 🥉 방법 3: 파일 예측
-```bash
-# CSV 파일
-python inference.py \
-    --model_path results/*/best_model.pth \
-    --input_data test.csv
-
-# NumPy 파일
-python inference.py \
-    --model_path results/*/best_model.pth \
-    --input_data signals.npy
-```
-
-**⚠️ 중요:** 대화형 모드는 사용 불가 (신호 차원이 너무 큼)
-
-**자세한 내용:** `PREDICTION_GUIDE.md` 참조
-
-### 평가
-
-```bash
-python evaluate.py \
-    --model_path results/*/best_model.pth \
-    --data_path ./data_downsampled
-```
-
-**생성 결과:**
-- Confusion Matrix (정규화/비정규화)
-- ROC Curves
-- Precision-Recall Curves
-- Classification Report
-
-### 시각화
-
-```bash
-python visualize.py \
-    --data_path ./data_downsampled \
-    --output_dir visualizations
-```
-
-**생성 결과:**
-- 클래스별 샘플 시각화
-- 시간/주파수 영역 분석
-- 스펙트로그램
-- 클래스 통계
+- **Vite 프록시**: `frontend/vite.config.ts`에서 `/api` → `http://localhost:8000`. 별도 CORS 설정 불필요.
+- **CORS (prod)**: `backend/app/main.py`의 `allow_origins` 갱신 후 재배포.
+- **체크포인트 포맷**: `.pth`에 `model_state_dict / scaler / label_names / val_acc / epoch` 포함. 외부 .pth 업로드는 허용 금지 (pickle RCE).
+- **이력 휘발**: 단일 사용자 MVP라 서버 재시작 시 `/api/history`는 초기화됩니다.
 
 ---
 
-## 🎯 추천 워크플로우
+## 문서
 
-```bash
-# Step 1: 데이터 다운샘플링 (필수!)
-python downsample_data.py --data_path ./data --target_size 8192
-
-# Step 2: 데이터 시각화 (선택)
-python visualize.py --data_path ./data_downsampled
-
-# Step 3: 학습
-python main.py train --data_path ./data_downsampled --model CNN
-
-# Step 4: 평가
-python evaluate.py --model_path results/*/best_model.pth --data_path ./data_downsampled
-
-# Step 5: 예측
-python simple_predict.py
-
-# 완료! 🎉
-```
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — 시스템 구조, 모듈 책임, 학습·추론 파이프라인, 설계 패턴, 보안/확장 포인트
+- [docs/UML.md](./docs/UML.md) — 클래스·시퀀스·상태 다이어그램 (Mermaid, GitHub/IDE에서 렌더링)
 
 ---
 
-## 📦 주요 기능
+## 라이선스
 
-### 🔥 3가지 모델
-
-| 모델 | 특징 | 파라미터 | 속도 | 성능 |
-|------|------|----------|------|------|
-| **CNN** | 1D Convolution, 빠르고 효율적 | ~2.5M | ⭐⭐⭐⭐⭐ | 93% |
-| **ResNet** | Residual Network, 고성능 | ~5M | ⭐⭐⭐ | 95% |
-| **MLP** | 특징 기반, 가장 빠름 | ~500K | ⭐⭐⭐⭐⭐ | 90% |
-
-### 🔧 고급 전처리
-
-- DC 오프셋 제거
-- 밴드패스 필터
-- 웨이블릿 노이즈 제거
-- 30+ 특징 자동 추출
-- 데이터 증강
-
-### 📊 완벽한 시각화
-
-- 시간/주파수 영역
-- 스펙트로그램
-- Confusion Matrix
-- ROC & PR Curves
-- 학습 곡선
-
-### ⚡ 메모리 최적화
-
-- 그래디언트 누적
-- 혼합 정밀도 (선택)
-- 데이터 다운샘플링
-- 배치 크기 자동 조정
-
----
-## ⚙️ 하이퍼파라미터
-
-### CNN (기본 - 빠르고 효율적)
-```python
-BATCH_SIZE = 32
-LEARNING_RATE = 0.001
-EPOCHS = 100
-PATIENCE = 15
-```
-
-### ResNet (고성능)
-```python
-BATCH_SIZE = 64
-LEARNING_RATE = 0.0005
-EPOCHS = 150
-PATIENCE = 20
-```
-
-### MLP (빠른 학습)
-```python
-BATCH_SIZE = 64
-LEARNING_RATE = 0.001
-EPOCHS = 80
-PATIENCE = 15
-```
-
----
-
-## 🔧 문제 해결
-
-### GPU 메모리 부족
-```bash
-# 해결 1: 다운샘플링
-python downsample_data.py --data_path ./data --target_size 8192
-
-# 해결 2: 배치 크기 줄이기
-python train.py --batch_size 2
-
-# 해결 3: CPU 사용
-python train.py --no_cuda
-```
-
-### 과적합
-```python
-# config.py에서 조정
-DROPOUT_RATE = 0.5  # 증가
-WEIGHT_DECAY = 1e-3  # 증가
-```
-
-### 데이터 로드 오류
-```python
-from dataset import load_kaggle_gearbox_data
-X, y, labels = load_kaggle_gearbox_data('./data')
-print(f"Shape: {X.shape}, Classes: {labels}")
-```
-
-### 예측 입력 문제
-```bash
-# ❌ 대화형 모드 사용 금지 (데이터가 너무 큼)
-# ✅ 파일 또는 자동 스크립트 사용
-python simple_predict.py
-```
-
-**자세한 해결책:** `QUICK_START_MEMORY.md` 참조
-
----
-
-## 📊 성능 벤치마크
-
-| 모델 | 파라미터 | 학습 시간* | 추론 시간 | 정확도 | GPU 메모리 |
-|------|----------|-----------|----------|--------|-----------|
-| CNN | 2.5M | 30-45분 | 5ms | 93% | 2GB |
-| ResNet | 5M | 60-90분 | 8ms | 95% | 4GB |
-| MLP | 500K | 15-30분 | 2ms | 90% | 1GB |
-
-*100 에폭, RTX 4060 Laptop GPU, 다운샘플링 데이터 기준
-
-### 메모리 절감 효과
-
-| 설정 | 메모리 | 시간 | 성능 |
-|------|--------|------|------|
-| 원본 (457K) | 6.5GB | 8시간 | 94% |
-| 다운샘플링 (8K) | 0.5GB | 40분 | 93% |
-| **절감률** | **92%** | **92%** | **-1%** |
-
----
-
-## 🎓 고급 기능
-
-### 1. 앙상블 모델
-```python
-from models import get_model
-import torch
-
-# 여러 모델 로드
-models = [
-    get_model('CNN', input_size, num_classes),
-    get_model('ResNet', input_size, num_classes),
-    get_model('MLP', input_size, num_classes)
-]
-
-# 앙상블 예측
-def ensemble_predict(models, input_data):
-    predictions = []
-    for model in models:
-        pred = model(input_data)
-        predictions.append(pred)
-    return torch.mean(torch.stack(predictions), dim=0)
-```
-
-### 2. 크로스 밸리데이션
-```python
-from sklearn.model_selection import KFold
-
-kfold = KFold(n_splits=5, shuffle=True)
-
-for fold, (train_idx, val_idx) in enumerate(kfold.split(X)):
-    print(f"Fold {fold+1}/5")
-    # 학습 코드
-```
-
-### 3. 하이퍼파라미터 튜닝
-```python
-import optuna
-
-def objective(trial):
-    lr = trial.suggest_loguniform('lr', 1e-5, 1e-2)
-    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64])
-    # 학습 및 평가
-    return val_acc
-
-study = optuna.create_study(direction='maximize')
-study.optimize(objective, n_trials=50)
-```
-
----
+MIT — [LICENSE](./LICENSE) 참조.

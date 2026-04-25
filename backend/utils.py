@@ -12,17 +12,20 @@ from sklearn.metrics import classification_report, confusion_matrix
 from pathlib import Path
 
 
-def train_epoch(model, loader, criterion, optimizer, device):
+def train_epoch(model, loader, criterion, optimizer, device,
+                scaler=None, use_amp=False):
     """
     한 에폭 학습
-    
+
     Args:
         model: 학습할 모델
         loader: 데이터 로더
         criterion: 손실 함수
         optimizer: 옵티마이저
         device: 디바이스
-    
+        scaler: torch.amp.GradScaler (AMP 사용 시)
+        use_amp (bool): Mixed precision 학습 여부
+
     Returns:
         tuple: (평균 손실, 정확도)
     """
@@ -31,14 +34,26 @@ def train_epoch(model, loader, criterion, optimizer, device):
     correct = 0
     total = 0
 
-    for inputs, labels in loader:
-        inputs, labels = inputs.to(device), labels.to(device)
+    amp_device = 'cuda' if device.type == 'cuda' else 'cpu'
 
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+    for inputs, labels in loader:
+        inputs = inputs.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        if use_amp and scaler is not None:
+            with torch.amp.autocast(device_type=amp_device):
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
         running_loss += loss.item() * inputs.size(0)
         _, predicted = torch.max(outputs, 1)
@@ -92,7 +107,8 @@ def validate_epoch(model, loader, criterion, device):
     return epoch_loss, epoch_acc, all_preds, all_labels
 
 
-def save_checkpoint(model, optimizer, epoch, val_acc, label_names, scaler, save_path):
+def save_checkpoint(model, optimizer, epoch, val_acc, label_names, scaler,
+                    save_path, save_optimizer=True):
     """
     체크포인트 저장
 
@@ -104,18 +120,22 @@ def save_checkpoint(model, optimizer, epoch, val_acc, label_names, scaler, save_
         label_names: 레이블 이름 리스트
         scaler: StandardScaler 객체
         save_path: 저장 경로
+        save_optimizer (bool): False면 optimizer state 제외하여 파일 크기 축소 (배포용)
     """
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    torch.save({
+    payload = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
         'val_acc': val_acc,
         'label_names': label_names,
         'scaler': scaler
-    }, save_path)
+    }
+    if save_optimizer:
+        payload['optimizer_state_dict'] = optimizer.state_dict()
+
+    torch.save(payload, save_path)
 
 
 def load_checkpoint(checkpoint_path, model, optimizer=None, device='cpu'):
@@ -131,7 +151,8 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device='cpu'):
     Returns:
         dict: 체크포인트 정보
     """
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    # scaler 등 pickle 객체 포함 → weights_only=False 필요
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     if optimizer is not None and 'optimizer_state_dict' in checkpoint:
@@ -236,12 +257,14 @@ def count_parameters(model):
     return total_params, trainable_params
 
 
-def set_seed(seed=42):
+def set_seed(seed=42, deterministic=False):
     """
     재현성을 위한 시드 설정
 
     Args:
         seed (int): 시드 값
+        deterministic (bool): True면 완전 재현성(cudnn.deterministic=True, benchmark=False).
+            기본 False는 고정 입력 크기에서 benchmark=True로 속도 우선.
     """
     import random
     random.seed(seed)
@@ -250,8 +273,12 @@ def set_seed(seed=42):
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        if deterministic:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        else:
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.benchmark = True
 
 
 class EarlyStopping:

@@ -152,3 +152,22 @@ cython_debug/
 #.idea/
 *.csv
 *.pth
+
+# Project data & model artifacts (large binaries — keep out of git)
+*.npy
+*.mat
+*.h5
+*.hdf5
+*.ckpt
+*.onnx
+backend/data/
+backend/data_downsampled/
+backend/results/
+backend/evaluation_results/
+backend/visualizations/
+
+# Frontend
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo

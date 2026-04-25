@@ -17,30 +17,41 @@ from dataset import load_kaggle_gearbox_data
 def downsample_signal(signal_data, target_size):
     """
     신호 다운샘플링
-    
+
+    scipy.signal.decimate는 factor>13에서 필터 품질이 떨어진다고 문서에서 권고하므로
+    - factor가 크면 resample_poly를 사용해 up/down 분수비로 직접 target_size 맞춤
+    - factor가 작으면 decimate(FIR, anti-aliasing) 사용
+
     Args:
         signal_data (np.ndarray): 원본 신호
         target_size (int): 목표 크기
-    
+
     Returns:
         np.ndarray: 다운샘플링된 신호
     """
-    if len(signal_data) <= target_size:
+    n = len(signal_data)
+    if n <= target_size:
         return signal_data
-    
-    # 다운샘플링 비율 계산
-    downsample_factor = len(signal_data) // target_size
-    
-    # Decimation (anti-aliasing 필터 포함)
-    downsampled = signal.decimate(signal_data, downsample_factor, ftype='fir')
-    
-    # 정확한 크기로 자르기
+
+    factor = n // target_size
+
+    if factor > 13:
+        # resample_poly는 up/down 비율로 anti-aliasing 필터 후 리샘플
+        from math import gcd
+        g = gcd(n, target_size)
+        up, down = target_size // g, n // g
+        downsampled = signal.resample_poly(signal_data, up, down)
+    else:
+        downsampled = signal.decimate(signal_data, factor, ftype='fir')
+
+    # 정확한 크기로 보정 (trim or pad)
     if len(downsampled) > target_size:
         downsampled = downsampled[:target_size]
     elif len(downsampled) < target_size:
-        # 패딩
-        downsampled = np.pad(downsampled, (0, target_size - len(downsampled)), mode='constant')
-    
+        downsampled = np.pad(
+            downsampled, (0, target_size - len(downsampled)), mode='constant'
+        )
+
     return downsampled
 
 

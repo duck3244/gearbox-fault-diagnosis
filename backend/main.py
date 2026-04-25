@@ -98,12 +98,10 @@ def parse_args():
   # ResNet 모델 학습
   python main.py train --data_path ./data --model ResNet --epochs 150
   
-  # 추론
+  # 추론 (입력 데이터 파일 필수)
   python main.py predict --model_path results/best_model.pth --input_data test.csv
-  
-  # 대화형 추론
-  python main.py predict --model_path results/best_model.pth
-  
+  python main.py predict --model_path results/best_model.pth --input_data signals.npy
+
   # 설정 확인
   python main.py config --model CNN
         """

@@ -265,7 +265,7 @@ def load_kaggle_gearbox_data(data_path):
 
 
 def create_dataloaders(X_train, y_train, X_val, y_val, X_test, y_test,
-                       batch_size=32, num_workers=2):
+                       batch_size=32, num_workers=2, train_sampler=None):
     """
     DataLoader 생성
 
@@ -275,6 +275,7 @@ def create_dataloaders(X_train, y_train, X_val, y_val, X_test, y_test,
         X_test, y_test: 테스트 데이터
         batch_size (int): 배치 크기
         num_workers (int): 워커 수
+        train_sampler: (선택) train 로더용 Sampler. 지정 시 shuffle=False로 강제됨.
 
     Returns:
         tuple: (train_loader, val_loader, test_loader)
@@ -285,12 +286,17 @@ def create_dataloaders(X_train, y_train, X_val, y_val, X_test, y_test,
     val_dataset = GearboxDataset(X_val, y_val)
     test_dataset = GearboxDataset(X_test, y_test)
 
+    persistent = num_workers > 0
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        drop_last=True,  # BatchNorm이 batch_size=1에서 깨지지 않도록
+        persistent_workers=persistent,
     )
 
     val_loader = DataLoader(
@@ -298,7 +304,8 @@ def create_dataloaders(X_train, y_train, X_val, y_val, X_test, y_test,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=persistent,
     )
 
     test_loader = DataLoader(
@@ -306,7 +313,8 @@ def create_dataloaders(X_train, y_train, X_val, y_val, X_test, y_test,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=persistent,
     )
 
     return train_loader, val_loader, test_loader
